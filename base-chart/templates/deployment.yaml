@@ -1,0 +1,142 @@
+{{- $fullName := include "base-chart.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "base-chart.fullname" . }}
+  labels:
+    {{- include "base-chart.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  minReadySeconds: {{ .Values.minReadySeconds }}
+  strategy:
+    type: {{ default "RollingUpdate" .Values.spec.strategy.type }}
+    {{- if eq .Values.spec.strategy.type "RollingUpdate"}}
+    rollingUpdate:
+      maxSurge: {{ .Values.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.rollingUpdate.maxUnavailable }}
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "base-chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        types: {{ .Values.labels.type }}
+        env: {{ .Values.labels.env }}
+        {{- include "base-chart.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "base-chart.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Release.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if eq .Values.type "ruby"}}
+          lifecycle:
+            postStart:
+              exec:
+                command: ["/bin/bash", "-c", "rails db:migrate"]
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.image.port }}
+              protocol: TCP
+          {{- if .Values.image.secondPort.enabled }}
+            - name: shttp
+              containerPort: {{ .Values.image.secondPort.port }}
+              protocol: TCP
+          {{- end }}
+          env:
+            {{- toYaml .Values.env | default "" | nindent 12 }}
+          {{- if .Values.volume.enabled }}
+          volumeMounts:
+            {{- if eq .Values.volume.name "secret" }}
+            - name: {{ .Values.volume.name }}
+              mountPath: {{ .Values.volume.mountPath }}
+              subPath: {{ .Values.volume.subPath }}
+              readOnly: {{ .Values.volume.csi.readOnly }}
+            {{- else }}
+            {{- toYaml .Values.volumeMounts | nindent 12 }}
+            {{- end }}
+            {{- if .Values.extravolumes.enabled }}
+            {{- toYaml .Values.volumeMounts | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.probes.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.path }}
+              port: http
+            initialDelaySeconds: 60
+            failureThreshold: 5
+            timeoutSeconds: 10
+          {{- end }}
+          {{- if .Values.probes.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.path }}
+              port: http
+            initialDelaySeconds: 60
+            failureThreshold: 5
+            timeoutSeconds: 10
+          {{- end }}
+          {{- if .Values.probes.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.volume.enabled }}
+      volumes:
+        {{- if eq .Values.volume.name "secret" }}
+        - name: {{ .Values.volume.name }}
+          csi:
+            driver: {{ .Values.volume.csi.driver }}
+            readOnly: {{ .Values.volume.csi.readOnly }}
+            volumeAttributes:
+              secretProviderClass: {{ include "base-chart.fullname" . }}-secret
+        {{- end }}
+        {{- if .Values.volume.secondVolume.enabled }}
+        - name: {{ .Values.volume.secondVolume.name }}   
+          persistentVolumeClaim:
+            claimName: {{ $fullName }}
+        {{- end }}
+        {{- if .Values.extravolumes.enabled }}
+        {{- toYaml .Values.altvolumes | nindent 8}}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    
